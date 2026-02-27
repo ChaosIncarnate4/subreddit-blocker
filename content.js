@@ -21,22 +21,18 @@
             // const selectors = [
             //     `shreddit-post[subreddit-prefixed-name="${rSub}"]`,
             //     `shreddit-post[community-name="${sub}"]`,
-            //     `faceplate-tracker[source="search"][data-faceplate-tracking-context*="${sub}"]`,
-            //     `faceplate-tracker[source="search"][data-faceplate-tracking-context*="${rSub}"]`,
-            //     `.thing[data-subreddit="${sub}"]`,
-            //     `.search-result-link[data-subreddit="${sub}"]`,
-            //     `[data-testid="search-result-link"][href*="/r/${sub}/"]`,
-            //     `a[href*="/r/${sub}/"]`,
-            //     `a[href*="/r/${sub}/comments/"]`,
-            //     `a[href*="/r/${sub}/comments"]`
+            //     // Add these for the new search interface:
+            //     `[subreddit-name="${sub}"]`,
+            //     `article:has(a[href*="/r/${sub}/"])`, 
+            //     `div:has(> shreddit-post[community-name="${sub}"])`
             // ];
             const selectors = [
                 `shreddit-post[subreddit-prefixed-name="${rSub}"]`,
                 `shreddit-post[community-name="${sub}"]`,
-                // Add these for the new search interface:
-                `[subreddit-name="${sub}"]`,
-                `article:has(a[href*="/r/${sub}/"])`, 
-                `div:has(> shreddit-post[community-name="${sub}"])`
+                `article:has(a[href*="/r/${sub}/"])`,
+                `div[data-testid="post-container"]:has(a[href*="/r/${sub}/"])`,
+                // This catches the modern "Faceplate" wrappers used in search
+                `faceplate-tracker:has(a[href*="/r/${sub}/"])`
             ];
 
             const joinedSelectors = selectors.join(', ');
@@ -127,23 +123,40 @@
         });
 
         // Catch anything whose subreddit link text matches
-        document.querySelectorAll('a[href]').forEach((link) => {
+        document.querySelectorAll('a[href*="/r/"]').forEach((link) => {
             const href = link.getAttribute('href') || '';
-            // Match /r/<sub> including post links like /r/<sub>/comments/...
+            const m = href.match(/\/r\/([A-Za-z0-9_\-]+)/i);
+            if (!m) return;
+            
+            const sub = m[1].toLowerCase();
+            if (!blockedSubs.map(s => s.toLowerCase()).includes(sub)) return;
+
+            // Find the highest level container to avoid "ghost" metadata
+            const container = link.closest('shreddit-post') || 
+                            link.closest('article') || 
+                            link.closest('[data-testid="post-container"]') ||
+                            link.closest('faceplate-tracker');
+            
+            if (container) {
+                container.style.setProperty('display', 'none', 'important');
+            }
+        });
+
+        // Also specifically target data-testid="post-title" links
+        document.querySelectorAll('[data-testid="post-title"][href]').forEach((link) => {
+            const href = link.getAttribute('href') || '';
             const m = href.match(/\/r\/([A-Za-z0-9_\-]+)(?:\/comments\b|[\/]|$)/i);
             if (!m) return;
             const sub = m[1];
             if (!blockedSubs.includes(sub)) return;
 
-            //hideResultCard(link);
             const container = link.closest('shreddit-post') || 
-                      link.closest('faceplate-tracker') || 
-                      link.closest('.search-result'); // For older UI versions
-    
+                      link.closest('[data-testid="post-container"]') ||
+                      link.closest('article');
             if (container) {
                 hideResultCard(container);
             } else {
-                hideResultCard(link); // Fallback
+                hideResultCard(link);
             }
         });
 
@@ -166,25 +179,30 @@
     /* ── MutationObserver ────────────────────────────────────────── */
     function observeDOM() {
         const observer = new MutationObserver((mutations) => {
-            for (const m of mutations) {
-                if (m.addedNodes.length > 0) {
-                    debouncedJsFilter();
+            let shouldRun = false;
+            for (const mutation of mutations) {
+                if (mutation.addedNodes.length > 0) {
+                    shouldRun = true;
                     break;
                 }
             }
+            if (shouldRun) debouncedJsFilter();
         });
-        observer.observe(document.body, { childList: true, subtree: true, attributes: false });
-        
-        // Run filter periodically to catch results that may have been added before observer attached
-        setInterval(jsFilter, 300);
+
+        observer.observe(document.documentElement, { 
+            childList: true, 
+            subtree: true 
+        });
     }
     
     /* ── Scroll listener for lazy-loaded content ────────────────── */
     function setupScrollListener() {
-        let scrollTimer = null;
         window.addEventListener('scroll', () => {
-            if (scrollTimer) clearTimeout(scrollTimer);
-            scrollTimer = setTimeout(jsFilter, 150);
+            jsFilter();
+            // Run jsFilter multiple times to catch posts that load with a delay
+            setTimeout(jsFilter, 25);
+            setTimeout(jsFilter, 75);
+            setTimeout(jsFilter, 150);
         }, { passive: true });
     }
 
