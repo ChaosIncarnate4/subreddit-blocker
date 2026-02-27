@@ -18,24 +18,31 @@
         blockedSubs.forEach((sub) => {
             const rSub = `r/${sub}`;
 
+            // const selectors = [
+            //     `shreddit-post[subreddit-prefixed-name="${rSub}"]`,
+            //     `shreddit-post[community-name="${sub}"]`,
+            //     `faceplate-tracker[source="search"][data-faceplate-tracking-context*="${sub}"]`,
+            //     `faceplate-tracker[source="search"][data-faceplate-tracking-context*="${rSub}"]`,
+            //     `.thing[data-subreddit="${sub}"]`,
+            //     `.search-result-link[data-subreddit="${sub}"]`,
+            //     `[data-testid="search-result-link"][href*="/r/${sub}/"]`,
+            //     `a[href*="/r/${sub}/"]`,
+            //     `a[href*="/r/${sub}/comments/"]`,
+            //     `a[href*="/r/${sub}/comments"]`
+            // ];
             const selectors = [
                 `shreddit-post[subreddit-prefixed-name="${rSub}"]`,
-                // exact-casing match only (user-controlled)
                 `shreddit-post[community-name="${sub}"]`,
-                // match faceplate-tracker contexts that contain the subreddit name (looser match)
-                `faceplate-tracker[source="search"][data-faceplate-tracking-context*="${sub}"]`,
-                `faceplate-tracker[source="search"][data-faceplate-tracking-context*="${rSub}"]`,
-                // old reddit
-                `.thing[data-subreddit="${sub}"]`,
-                `.search-result-link[data-subreddit="${sub}"]`,
-                // generic attribute or links that contain /r/<sub>/
-                `[data-testid="search-result-link"][href*="/r/${sub}/"]`,
-                `a[href*="/r/${sub}/"]`,
-                `a[href*="/r/${sub}/comments/"]`,
-                `a[href*="/r/${sub}/comments"]`
+                // Add these for the new search interface:
+                `[subreddit-name="${sub}"]`,
+                `article:has(a[href*="/r/${sub}/"])`, 
+                `div:has(> shreddit-post[community-name="${sub}"])`
             ];
 
-            rules.push(`${selectors.join(', ')} { display: none !important; }`);
+            const joinedSelectors = selectors.join(', ');
+            
+            // Hide the main elements
+            rules.push(`${joinedSelectors} { display: none !important; }`);
         });
 
         return rules.join('\n');
@@ -60,21 +67,19 @@
     }
 
     /**
-     * Find the outermost search-result card container around `el`
-     * and hide it. The card is a div with classes like
-     * "hover:bg-neutral-background-hover" and "my-2xs".
+     * Hide the specific element itself, not its container.
      */
     function hideResultCard(el) {
-        // Try the known Reddit search result card class first
-        const card = el.closest('.my-2xs')
-            || el.closest('[class*="hover:bg-neutral-background-hover"]')
-            || el.closest('[class*="justify-between"][class*="my-2xs"]');
-        if (card) {
-            card.style.setProperty('display', 'none', 'important');
-            return;
-        }
-        // Fallback: just hide the element itself
         el.style.setProperty('display', 'none', 'important');
+    }
+
+    /**
+     * Restore visibility of all previously hidden elements.
+     */
+    function restoreAll() {
+        document.querySelectorAll('shreddit-post, faceplate-tracker, search-telemetry-tracker, a[href], .thing[data-subreddit], .search-result[data-subreddit]').forEach((el) => {
+            el.style.removeProperty('display');
+        });
     }
 
     function jsFilter() {
@@ -93,12 +98,19 @@
             }
         });
 
-        // faceplate-tracker — check data attribute JSON
-        document.querySelectorAll('faceplate-tracker').forEach((ft) => {
+        // search-telemetry-tracker and faceplate-tracker — check data attribute JSON
+        document.querySelectorAll('faceplate-tracker, search-telemetry-tracker').forEach((ft) => {
             const ctx = ft.getAttribute('data-faceplate-tracking-context') || '';
             try {
                 const obj = JSON.parse(ctx);
-                const sub = extractSub(obj.subredditName || obj.subreddit || obj.communityName || '');
+                // Check for nested subreddit.name structure and flat structures
+                const sub = extractSub(
+                    (obj.subreddit?.name) ||
+                    obj.subredditName || 
+                    obj.subreddit || 
+                    obj.communityName || 
+                    ''
+                );
                 if (sub && blockedSubs.includes(sub)) {
                     hideResultCard(ft);
                 }
@@ -123,7 +135,16 @@
             const sub = m[1];
             if (!blockedSubs.includes(sub)) return;
 
-            hideResultCard(link);
+            //hideResultCard(link);
+            const container = link.closest('shreddit-post') || 
+                      link.closest('faceplate-tracker') || 
+                      link.closest('.search-result'); // For older UI versions
+    
+            if (container) {
+                hideResultCard(container);
+            } else {
+                hideResultCard(link); // Fallback
+            }
         });
 
         // Old Reddit
@@ -139,7 +160,7 @@
     let jsFilterTimer = null;
     function debouncedJsFilter() {
         if (jsFilterTimer) clearTimeout(jsFilterTimer);
-        jsFilterTimer = setTimeout(jsFilter, 80);
+        jsFilterTimer = setTimeout(jsFilter, 50);
     }
 
     /* ── MutationObserver ────────────────────────────────────────── */
@@ -152,7 +173,19 @@
                 }
             }
         });
-        observer.observe(document.body, { childList: true, subtree: true });
+        observer.observe(document.body, { childList: true, subtree: true, attributes: false });
+        
+        // Run filter periodically to catch results that may have been added before observer attached
+        setInterval(jsFilter, 300);
+    }
+    
+    /* ── Scroll listener for lazy-loaded content ────────────────── */
+    function setupScrollListener() {
+        let scrollTimer = null;
+        window.addEventListener('scroll', () => {
+            if (scrollTimer) clearTimeout(scrollTimer);
+            scrollTimer = setTimeout(jsFilter, 150);
+        }, { passive: true });
     }
 
     /* ── Storage change listener ─────────────────────────────────── */
@@ -160,6 +193,7 @@
         if (changes.blockedSubs) {
             blockedSubs = (changes.blockedSubs.newValue || []);
             applyCSS();
+            restoreAll();
             jsFilter();
         }
     });
@@ -174,12 +208,22 @@
         // JS pass to catch anything CSS missed
         jsFilter();
 
-        // Repeat at intervals for dynamic / lazy loading
+        // Extended timeout passes to catch fully rendered content
+        setTimeout(jsFilter, 50);
+        setTimeout(jsFilter, 100);
+        setTimeout(jsFilter, 250);
         setTimeout(jsFilter, 500);
+        setTimeout(jsFilter, 750);
+        setTimeout(jsFilter, 1000);
         setTimeout(jsFilter, 1500);
-        setTimeout(jsFilter, 3000);
+        setTimeout(jsFilter, 2500);
+        setTimeout(jsFilter, 4000);
+        setTimeout(jsFilter, 6000);
 
         // Watch for future DOM changes
         observeDOM();
+        
+        // Setup scroll listener for lazy-loaded results
+        setupScrollListener();
     });
 })();
