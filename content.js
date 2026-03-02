@@ -3,7 +3,6 @@
 
     let blockedSubs = [];
     let styleEl = null;
-    let observerTimer = null;
 
     /* ── Inject / update a <style> tag ─────────────────────────────
        CSS attribute selectors are the most reliable way to hide
@@ -15,30 +14,26 @@
 
         const rules = [];
 
-        blockedSubs.forEach((sub) => {
+        blockedSubs.forEach((item) => {
+            const sub = typeof item === 'string' ? item : item.name;
             const rSub = `r/${sub}`;
 
-            // const selectors = [
-            //     `shreddit-post[subreddit-prefixed-name="${rSub}"]`,
-            //     `shreddit-post[community-name="${sub}"]`,
-            //     // Add these for the new search interface:
-            //     `[subreddit-name="${sub}"]`,
-            //     `article:has(a[href*="/r/${sub}/"])`, 
-            //     `div:has(> shreddit-post[community-name="${sub}"])`
-            // ];
+            // We use the CSS Adjacent Sibling Combinator (+) to target the divider 
+            // ONLY if it immediately follows a blocked post element.
             const selectors = [
-                `shreddit-post[subreddit-prefixed-name="${rSub}"]`,
+                `shreddit-post[community-name="${sub}"] + hr.list-divider-line`,
+                `shreddit-post[subreddit-prefixed-name="${rSub}"] + hr.list-divider-line`,
+                `faceplate-tracker:has(a[href*="/r/${sub}/"]) + hr`,
+                `div[data-testid="post-container"]:has(a[href*="/r/${sub}/"]) + hr`,
+                // Standard post hiding selectors
                 `shreddit-post[community-name="${sub}"]`,
+                `shreddit-post[subreddit-prefixed-name="${rSub}"]`,
+                `faceplate-tracker:has(a[href*="/r/${sub}/"])`,
                 `article:has(a[href*="/r/${sub}/"])`,
-                `div[data-testid="post-container"]:has(a[href*="/r/${sub}/"])`,
-                // This catches the modern "Faceplate" wrappers used in search
-                `faceplate-tracker:has(a[href*="/r/${sub}/"])`
+                `div[data-testid="post-container"]:has(a[href*="/r/${sub}/"])`
             ];
 
-            const joinedSelectors = selectors.join(', ');
-            
-            // Hide the main elements
-            rules.push(`${joinedSelectors} { display: none !important; }`);
+            rules.push(`${selectors.join(', ')} { display: none !important; }`);
         });
 
         return rules.join('\n');
@@ -63,6 +58,17 @@
     }
 
     /**
+     * Check if a subreddit name is in the blocked list.
+     * Handles both old format (strings) and new format (objects with name property).
+     */
+    function isBlocked(subName) {
+        return blockedSubs.some((item) => {
+            const name = typeof item === 'string' ? item : item.name;
+            return name === subName;
+        });
+    }
+
+    /**
      * Hide the specific element itself, not its container.
      */
     function hideResultCard(el) {
@@ -73,8 +79,31 @@
      * Restore visibility of all previously hidden elements.
      */
     function restoreAll() {
-        document.querySelectorAll('shreddit-post, faceplate-tracker, search-telemetry-tracker, a[href], .thing[data-subreddit], .search-result[data-subreddit]').forEach((el) => {
+        document.querySelectorAll('shreddit-post, faceplate-tracker, search-telemetry-tracker, a[href], .thing[data-subreddit], .search-result[data-subreddit], [data-testid="post-divider"], hr').forEach((el) => {
             el.style.removeProperty('display');
+        });
+    }
+
+    /**
+     * Hide dividers that follow a hidden post.
+     * Specifically targets the "list-divider-line" used in Shreddit.
+     */
+    function hideFollowingDividers() {
+        // Target specifically the dividers you mentioned
+        const dividers = document.querySelectorAll('hr.list-divider-line, hr.border-b-neutral-border-weak');
+        
+        dividers.forEach((divider) => {
+            let prev = divider.previousElementSibling;
+            
+            // Look at the immediate previous sibling. 
+            // If it is hidden (display: none), then hide this divider.
+            if (prev) {
+                const isPrevHidden = window.getComputedStyle(prev).display === 'none' || prev.style.display === 'none' || prev.hasAttribute('hidden');
+
+                if (isPrevHidden) {
+                    hideResultCard(divider);
+                }
+            }
         });
     }
 
@@ -89,7 +118,7 @@
                 post.getAttribute('subredditprefixedname');
             if (!attr) return;
             const sub = extractSub(attr);
-            if (sub && blockedSubs.includes(sub)) {
+            if (sub && isBlocked(sub)) {
                 hideResultCard(post);
             }
         });
@@ -107,7 +136,7 @@
                     obj.communityName || 
                     ''
                 );
-                if (sub && blockedSubs.includes(sub)) {
+                if (sub && isBlocked(sub)) {
                     hideResultCard(ft);
                 }
             } catch (_) {
@@ -115,7 +144,7 @@
                 const m = ctx.match(/subreddit(?:Name|PrefixedName)?[^A-Za-z0-9_\-]*r?\/?([A-Za-z0-9_\-]+)/i);
                 if (m) {
                     const sub = m[1];
-                    if (blockedSubs.includes(sub)) {
+                    if (isBlocked(sub)) {
                         hideResultCard(ft);
                     }
                 }
@@ -129,7 +158,11 @@
             if (!m) return;
             
             const sub = m[1].toLowerCase();
-            if (!blockedSubs.map(s => s.toLowerCase()).includes(sub)) return;
+            const blockedLower = blockedSubs.map(item => {
+                const name = typeof item === 'string' ? item : item.name;
+                return name.toLowerCase();
+            });
+            if (!blockedLower.includes(sub)) return;
 
             // Find the highest level container to avoid "ghost" metadata
             const container = link.closest('shreddit-post') || 
@@ -148,7 +181,7 @@
             const m = href.match(/\/r\/([A-Za-z0-9_\-]+)(?:\/comments\b|[\/]|$)/i);
             if (!m) return;
             const sub = m[1];
-            if (!blockedSubs.includes(sub)) return;
+            if (!isBlocked(sub)) return;
 
             const container = link.closest('shreddit-post') || 
                       link.closest('[data-testid="post-container"]') ||
@@ -163,10 +196,13 @@
         // Old Reddit
         document.querySelectorAll('.thing[data-subreddit], .search-result[data-subreddit]').forEach((el) => {
             const sub = (el.getAttribute('data-subreddit') || '');
-            if (blockedSubs.includes(sub)) {
+            if (isBlocked(sub)) {
                 el.style.setProperty('display', 'none', 'important');
             }
         });
+
+        // Hide dividers that follow blocked posts
+        hideFollowingDividers();
     }
 
     /* ── Debounce helper ─────────────────────────────────────────── */

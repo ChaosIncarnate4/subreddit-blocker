@@ -3,21 +3,52 @@
   const addBtn = document.getElementById('add-btn');
   const listEl = document.getElementById('blocked-list');
   const emptyMsg = document.getElementById('empty-msg');
+  const sortSelect = document.getElementById('sort-select');
 
   let blocked = [];
+  let sortMode = 'name';
 
   /* ── Storage helpers ──────────────────────── */
   function load(cb) {
     chrome.storage.sync.get({ blockedSubs: [] }, (data) => {
       blocked = data.blockedSubs;
-      cb();
+      
+      // Migrate old format (array of strings) to new format (array of objects)
+      blocked = blocked.map((item) => {
+        if (typeof item === 'string') {
+          return { name: item, addedAt: Date.now() };
+        }
+        return item;
+      });
+
+      // Load sort preference
+      chrome.storage.sync.get({ sortMode: 'name' }, (data) => {
+        sortMode = data.sortMode;
+        if (sortSelect) sortSelect.value = sortMode;
+        cb();
+      });
     });
   }
 
   function save(cb) {
-    chrome.storage.sync.set({ blockedSubs: blocked }, () => {
+    chrome.storage.sync.set({ blockedSubs: blocked, sortMode }, () => {
       if (cb) cb();
     });
+  }
+
+  /* ── Sorting ───────────────────────────────── */
+  function getSortedBlocked() {
+    const copy = [...blocked];
+
+    if (sortMode === 'name') {
+      copy.sort((a, b) => a.name.localeCompare(b.name));
+    } else if (sortMode === 'newest') {
+      copy.sort((a, b) => b.addedAt - a.addedAt);
+    } else if (sortMode === 'oldest') {
+      copy.sort((a, b) => a.addedAt - b.addedAt);
+    }
+
+    return copy;
   }
 
   /* ── Render ────────────────────────────────── */
@@ -31,7 +62,9 @@
 
     emptyMsg.classList.add('hidden');
 
-    blocked.forEach((sub) => {
+    const sorted = getSortedBlocked();
+    sorted.forEach((item) => {
+      const sub = item.name;
       const chip = document.createElement('div');
       chip.className = 'chip';
 
@@ -70,15 +103,14 @@
 
     if (!name) return;
 
-    if (blocked.includes(name)) {
+    if (blocked.some((item) => item.name === name)) {
       showToast(`r/${name} is already blocked`);
       input.value = '';
       input.focus();
       return;
     }
 
-    blocked.push(name);
-    blocked.sort();
+    blocked.push({ name, addedAt: Date.now() });
     save(() => {
       render();
       input.value = '';
@@ -88,7 +120,7 @@
   }
 
   function removeSub(name) {
-    blocked = blocked.filter((s) => s !== name);
+    blocked = blocked.filter((item) => item.name !== name);
     save(() => {
       render();
       showToast(`r/${name} unblocked`);
@@ -115,6 +147,13 @@
 
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') addSub();
+  });
+
+  sortSelect.addEventListener('change', (e) => {
+    sortMode = e.target.value;
+    save(() => {
+      render();
+    });
   });
 
   /* ── Init ──────────────────────────────────── */
