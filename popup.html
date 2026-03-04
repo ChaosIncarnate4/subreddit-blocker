@@ -28,6 +28,8 @@
       </button>
     </div>
 
+    <hr class="divider">
+
     <div class="sort-container">
       <label for="sort-select">Sort by:</label>
       <select id="sort-select">
@@ -35,6 +37,16 @@
         <option value="newest">Time Added (Newest)</option>
         <option value="oldest">Time Added (Oldest)</option>
       </select>
+    </div>
+
+    <div class="search-container">
+      <input
+        type="text"
+        id="search-input"
+        placeholder="Search blocked subreddits..."
+        autocomplete="off"
+        spellcheck="false"
+      >
     </div>
 
     <div id="blocked-list" class="blocked-list">

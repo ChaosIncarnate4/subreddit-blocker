@@ -4,9 +4,11 @@
   const listEl = document.getElementById('blocked-list');
   const emptyMsg = document.getElementById('empty-msg');
   const sortSelect = document.getElementById('sort-select');
+  const searchInput = document.getElementById('search-input');
 
   let blocked = [];
   let sortMode = 'name';
+  let searchQuery = '';
 
   /* ── Storage helpers ──────────────────────── */
   function load(cb) {
@@ -55,15 +57,28 @@
   function render() {
     listEl.innerHTML = '';
 
+    const sorted = getSortedBlocked();
+    
+    // Filter by search query
+    const filtered = sorted.filter((item) => 
+      item.name.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+
     if (blocked.length === 0) {
+      emptyMsg.textContent = 'No subreddits blocked yet.';
+      emptyMsg.classList.remove('hidden');
+      return;
+    }
+
+    if (filtered.length === 0) {
+      emptyMsg.textContent = 'No matching subreddits.';
       emptyMsg.classList.remove('hidden');
       return;
     }
 
     emptyMsg.classList.add('hidden');
 
-    const sorted = getSortedBlocked();
-    sorted.forEach((item) => {
+    filtered.forEach((item) => {
       const sub = item.name;
       const chip = document.createElement('div');
       chip.className = 'chip';
@@ -112,6 +127,8 @@
 
     blocked.push({ name, addedAt: Date.now() });
     save(() => {
+      searchQuery = '';
+      searchInput.value = '';
       render();
       input.value = '';
       input.focus();
@@ -122,6 +139,8 @@
   function removeSub(name) {
     blocked = blocked.filter((item) => item.name !== name);
     save(() => {
+      searchQuery = '';
+      searchInput.value = '';
       render();
       showToast(`r/${name} unblocked`);
     });
@@ -154,6 +173,11 @@
     save(() => {
       render();
     });
+  });
+
+  searchInput.addEventListener('input', (e) => {
+    searchQuery = e.target.value;
+    render();
   });
 
   /* ── Init ──────────────────────────────────── */

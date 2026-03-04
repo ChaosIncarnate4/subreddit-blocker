@@ -201,8 +201,118 @@
             }
         });
 
+        // Hide AutoModerator comments
+        hideAutoModeratorComments();
+
         // Hide dividers that follow blocked posts
         hideFollowingDividers();
+    }
+
+    /**
+     * Hide comments created by u/AutoModerator.
+     * Only applies when searching comments (type=comments).
+     *
+     * Strategy: For every search-telemetry-tracker, parse its
+     * data-faceplate-tracking-context JSON and also inspect any
+     * descendant faceplate-hovercard[label] whose label follows the
+     * "username details" pattern.  If the resolved username is
+     * "AutoModerator" (case-insensitive), hide the nearest comment
+     * container walking up the DOM.
+     */
+    function hideAutoModeratorComments() {
+        // Only run on comment searches
+        const url = window.location.href;
+        if (!url.includes('type=comments')) return;
+
+        /**
+         * Given a label string, extract the username portion.
+         * Expected formats:
+         *   "AutoModerator details"
+         *   "u/AutoModerator details"
+         *   "AutoModerator"          (fallback — no trailing word)
+         * Returns the username string, or null if unparseable.
+         */
+        function extractUsernameFromLabel(label) {
+            if (!label) return null;
+            // Strip leading "u/" if present, then grab everything before
+            // the last word (which is "details") — or the whole string.
+            const cleaned = label.trim().replace(/^u\//i, '');
+            // "AutoModerator details"  →  ["AutoModerator", "details"]
+            const parts = cleaned.split(/\s+/);
+            if (parts.length >= 2 && parts[parts.length - 1].toLowerCase() === 'details') {
+                return parts.slice(0, parts.length - 1).join(' ');
+            }
+            // No trailing "details" word — treat whole string as username
+            return cleaned;
+        }
+
+        function isAutoMod(username) {
+            return username && username === 'AutoModerator';
+        }
+
+        /**
+         * Walk up from `el` to find the outermost comment/result wrapper
+         * that should be hidden.  Prefers search-telemetry-tracker itself
+         * (which wraps the entire result card in comment search) before
+         * falling back to semantic comment elements.
+         */
+        function findCommentContainer(el) {
+            // In Reddit's comment-search layout the search-telemetry-tracker
+            // IS the top-level result card — hiding it removes the whole row.
+            const tracker = el.closest('search-telemetry-tracker');
+            if (tracker) return tracker;
+
+            return (
+                el.closest('shreddit-comment') ||
+                el.closest('[data-testid="comment"]') ||
+                el.closest('.comment')
+            );
+        }
+
+        // ── Pass 1: check data-faceplate-tracking-context JSON on every tracker
+        document.querySelectorAll('search-telemetry-tracker').forEach((tracker) => {
+            const ctx = tracker.getAttribute('data-faceplate-tracking-context') || '';
+            try {
+                const obj = JSON.parse(ctx);
+                // Common field names observed in Reddit's tracking payloads
+                const author =
+                    obj.author ||
+                    obj.authorName ||
+                    obj.username ||
+                    (obj.comment && obj.comment.author) ||
+                    '';
+                if (isAutoMod(extractUsernameFromLabel(author) || author)) {
+                    hideResultCard(tracker);
+                    return; // no need to inspect hovercards inside
+                }
+            } catch (_) { /* not JSON — fall through to hovercard pass */ }
+
+            // ── Pass 2: inspect every faceplate-hovercard[label] inside this tracker
+            tracker.querySelectorAll('faceplate-hovercard[label]').forEach((hovercard) => {
+                const label = hovercard.getAttribute('label') || '';
+                const username = extractUsernameFromLabel(label);
+                if (isAutoMod(username)) {
+                    const container = findCommentContainer(hovercard);
+                    if (container) {
+                        hideResultCard(container);
+                    }
+                }
+            });
+        });
+
+        // ── Pass 3: catch hovercards that sit outside a search-telemetry-tracker
+        document.querySelectorAll('faceplate-hovercard[label]').forEach((hovercard) => {
+            // Skip if already handled in pass 2
+            if (hovercard.closest('search-telemetry-tracker')) return;
+            const label = hovercard.getAttribute('label') || '';
+            const username = extractUsernameFromLabel(label);
+            if (isAutoMod(username)) {
+                const container = findCommentContainer(hovercard);
+                if (container) {
+                    hideResultCard(container);
+                }
+            }
+        });
     }
 
     /* ── Debounce helper ─────────────────────────────────────────── */
